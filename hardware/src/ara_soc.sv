@@ -22,10 +22,14 @@ module ara_soc import axi_pkg::*; import ara_pkg::*; #(
     parameter  int           unsigned AxiAddrWidth = 64,
     parameter  int           unsigned AxiUserWidth = 1,
     parameter  int           unsigned AxiIdWidth   = 5,
+    parameter  bit                    ExternalAxiMaster = 1'b0,
     // AXI Resp Delay [ps] for gate-level simulation
     parameter  int           unsigned AxiRespDelay = 200,
     // Main memory
     parameter  int           unsigned L2NumWords   = 2**20,
+    localparam int           unsigned NrAXIMasters = ExternalAxiMaster ? 2 : 1,
+    localparam int           unsigned AxiSocIdWidth = AxiIdWidth - $clog2(NrAXIMasters),
+    localparam int           unsigned AxiCoreIdWidth = AxiSocIdWidth - 1,
     // Dependant parameters. DO NOT CHANGE!
     localparam type                   axi_data_t   = logic [AxiDataWidth-1:0],
     localparam type                   axi_strb_t   = logic [AxiDataWidth/8-1:0],
@@ -55,7 +59,43 @@ module ara_soc import axi_pkg::*; import ara_pkg::*; #(
     output logic [31:0] uart_pwdata_o,
     input  logic [31:0] uart_prdata_i,
     input  logic        uart_pready_i,
-    input  logic        uart_pslverr_i
+    input  logic        uart_pslverr_i,
+    // Optional external AXI master port. This is intended for FPGA shells such as XDMA.
+    input  logic [AxiSocIdWidth-1:0]  ext_axi_awid_i,
+    input  logic [AxiAddrWidth-1:0]   ext_axi_awaddr_i,
+    input  logic [7:0]                ext_axi_awlen_i,
+    input  logic [2:0]                ext_axi_awsize_i,
+    input  logic [1:0]                ext_axi_awburst_i,
+    input  logic                      ext_axi_awlock_i,
+    input  logic [3:0]                ext_axi_awcache_i,
+    input  logic [2:0]                ext_axi_awprot_i,
+    input  logic                      ext_axi_awvalid_i,
+    output logic                      ext_axi_awready_o,
+    input  logic [AxiDataWidth-1:0]   ext_axi_wdata_i,
+    input  logic [AxiDataWidth/8-1:0] ext_axi_wstrb_i,
+    input  logic                      ext_axi_wlast_i,
+    input  logic                      ext_axi_wvalid_i,
+    output logic                      ext_axi_wready_o,
+    output logic [AxiSocIdWidth-1:0]  ext_axi_bid_o,
+    output logic [1:0]                ext_axi_bresp_o,
+    output logic                      ext_axi_bvalid_o,
+    input  logic                      ext_axi_bready_i,
+    input  logic [AxiSocIdWidth-1:0]  ext_axi_arid_i,
+    input  logic [AxiAddrWidth-1:0]   ext_axi_araddr_i,
+    input  logic [7:0]                ext_axi_arlen_i,
+    input  logic [2:0]                ext_axi_arsize_i,
+    input  logic [1:0]                ext_axi_arburst_i,
+    input  logic                      ext_axi_arlock_i,
+    input  logic [3:0]                ext_axi_arcache_i,
+    input  logic [2:0]                ext_axi_arprot_i,
+    input  logic                      ext_axi_arvalid_i,
+    output logic                      ext_axi_arready_o,
+    output logic [AxiSocIdWidth-1:0]  ext_axi_rid_o,
+    output logic [AxiDataWidth-1:0]   ext_axi_rdata_o,
+    output logic [1:0]                ext_axi_rresp_o,
+    output logic                      ext_axi_rlast_o,
+    output logic                      ext_axi_rvalid_o,
+    input  logic                      ext_axi_rready_i
   );
 
   `include "axi/assign.svh"
@@ -67,7 +107,7 @@ module ara_soc import axi_pkg::*; import ara_pkg::*; #(
   //  Memory Regions  //
   //////////////////////
 
-  localparam NrAXIMasters = 1; // Actually masters, but slaves on the crossbar
+  // NrAXIMasters are actually masters, but slaves on the crossbar.
 
   typedef enum int unsigned {
     L2MEM = 0,
@@ -99,9 +139,6 @@ module ara_soc import axi_pkg::*; import ara_pkg::*; #(
   localparam AxiWideDataWidth   = AxiDataWidth;
   localparam AXiWideStrbWidth   = AxiWideDataWidth / 8;
 
-  localparam AxiSocIdWidth  = AxiIdWidth - $clog2(NrAXIMasters);
-  localparam AxiCoreIdWidth = AxiSocIdWidth - 1;
-
   // Internal types
   typedef logic [AxiNarrowDataWidth-1:0] axi_narrow_data_t;
   typedef logic [AxiNarrowStrbWidth-1:0] axi_narrow_strb_t;
@@ -109,13 +146,13 @@ module ara_soc import axi_pkg::*; import ara_pkg::*; #(
   typedef logic [AxiCoreIdWidth-1:0] axi_core_id_t;
 
   // AXI Typedefs
-  `AXI_TYPEDEF_ALL(system, axi_addr_t, axi_id_t, axi_data_t, axi_strb_t, axi_user_t)
+  `AXI_TYPEDEF_ALL(system, axi_addr_t, axi_soc_id_t, axi_data_t, axi_strb_t, axi_user_t)
   `AXI_TYPEDEF_ALL(ara_axi, axi_addr_t, axi_core_id_t, axi_data_t, axi_strb_t, axi_user_t)
   `AXI_TYPEDEF_ALL(ariane_axi, axi_addr_t, axi_core_id_t, axi_narrow_data_t, axi_narrow_strb_t,
     axi_user_t)
-  `AXI_TYPEDEF_ALL(soc_narrow, axi_addr_t, axi_soc_id_t, axi_narrow_data_t, axi_narrow_strb_t,
+  `AXI_TYPEDEF_ALL(soc_narrow, axi_addr_t, axi_id_t, axi_narrow_data_t, axi_narrow_strb_t,
     axi_user_t)
-  `AXI_TYPEDEF_ALL(soc_wide, axi_addr_t, axi_soc_id_t, axi_data_t, axi_strb_t, axi_user_t)
+  `AXI_TYPEDEF_ALL(soc_wide, axi_addr_t, axi_id_t, axi_data_t, axi_strb_t, axi_user_t)
   `AXI_LITE_TYPEDEF_ALL(soc_narrow_lite, axi_addr_t, axi_narrow_data_t, axi_narrow_strb_t)
 
   `AXI_TYPEDEF_ALL(ara_cluster_axi, cluster_axi_addr_t, axi_core_id_t, cluster_axi_data_t, cluster_axi_strb_t, cluster_axi_user_t)
@@ -124,8 +161,10 @@ module ara_soc import axi_pkg::*; import ara_pkg::*; #(
   system_req_t  system_axi_req_spill;
   system_resp_t system_axi_resp_spill;
   system_resp_t system_axi_resp_spill_del;
-  system_req_t  system_axi_req;
-  system_resp_t system_axi_resp;
+  system_req_t  core_axi_req;
+  system_resp_t core_axi_resp;
+  system_req_t  [NrAXIMasters-1:0] system_axi_req;
+  system_resp_t [NrAXIMasters-1:0] system_axi_resp;
 
   soc_wide_req_t    [NrAXISlaves-1:0] periph_wide_axi_req;
   soc_wide_resp_t   [NrAXISlaves-1:0] periph_wide_axi_resp;
@@ -456,7 +495,8 @@ module ara_soc import axi_pkg::*; import ara_pkg::*; #(
 
   assign hart_id = '0;
 
-  localparam ariane_pkg::ariane_cfg_t ArianeAraConfig = '{
+  typedef ariane_pkg::ariane_cfg_t ariane_cfg_t;
+  localparam ariane_cfg_t ArianeAraConfig = '{
     RASDepth             : 2,
     BTBEntries           : 32,
     BHTEntries           : 128,
@@ -535,8 +575,8 @@ module ara_soc import axi_pkg::*; import ara_pkg::*; #(
     .scan_data_i  (1'b0                     ),
     .scan_data_o  (/* Unconnected */        ),
 `ifndef TARGET_GATESIM
-    .axi_req_o    (system_axi_req           ),
-    .axi_resp_i   (system_axi_resp          )
+    .axi_req_o    (core_axi_req             ),
+    .axi_resp_i   (core_axi_resp            )
   );
 `else
     .axi_req_o    (system_axi_req_spill     ),
@@ -561,10 +601,60 @@ module ara_soc import axi_pkg::*; import ara_pkg::*; #(
     .rst_ni      (rst_ni),
     .slv_req_i   (system_axi_req_spill),
     .slv_resp_o  (system_axi_resp_spill),
-    .mst_req_o   (system_axi_req),
-    .mst_resp_i  (system_axi_resp)
+    .mst_req_o   (core_axi_req),
+    .mst_resp_i  (core_axi_resp)
   );
 `endif
+
+  assign system_axi_req[0] = core_axi_req;
+  assign core_axi_resp = system_axi_resp[0];
+
+  if (ExternalAxiMaster) begin : gen_ext_axi_master
+    assign system_axi_req[1].aw = '{
+      id: ext_axi_awid_i, addr: ext_axi_awaddr_i, len: ext_axi_awlen_i,
+      size: ext_axi_awsize_i, burst: ext_axi_awburst_i, lock: ext_axi_awlock_i,
+      cache: ext_axi_awcache_i, prot: ext_axi_awprot_i, qos: '0, region: '0,
+      atop: '0, user: '0
+    };
+    assign system_axi_req[1].aw_valid = ext_axi_awvalid_i;
+    assign system_axi_req[1].w = '{
+      data: ext_axi_wdata_i, strb: ext_axi_wstrb_i, last: ext_axi_wlast_i, user: '0
+    };
+    assign system_axi_req[1].w_valid = ext_axi_wvalid_i;
+    assign system_axi_req[1].b_ready = ext_axi_bready_i;
+    assign system_axi_req[1].ar = '{
+      id: ext_axi_arid_i, addr: ext_axi_araddr_i, len: ext_axi_arlen_i,
+      size: ext_axi_arsize_i, burst: ext_axi_arburst_i, lock: ext_axi_arlock_i,
+      cache: ext_axi_arcache_i, prot: ext_axi_arprot_i, qos: '0, region: '0,
+      user: '0
+    };
+    assign system_axi_req[1].ar_valid = ext_axi_arvalid_i;
+    assign system_axi_req[1].r_ready = ext_axi_rready_i;
+
+    assign ext_axi_awready_o = system_axi_resp[1].aw_ready;
+    assign ext_axi_wready_o  = system_axi_resp[1].w_ready;
+    assign ext_axi_bid_o     = system_axi_resp[1].b.id;
+    assign ext_axi_bresp_o   = system_axi_resp[1].b.resp;
+    assign ext_axi_bvalid_o  = system_axi_resp[1].b_valid;
+    assign ext_axi_arready_o = system_axi_resp[1].ar_ready;
+    assign ext_axi_rid_o     = system_axi_resp[1].r.id;
+    assign ext_axi_rdata_o   = system_axi_resp[1].r.data;
+    assign ext_axi_rresp_o   = system_axi_resp[1].r.resp;
+    assign ext_axi_rlast_o   = system_axi_resp[1].r.last;
+    assign ext_axi_rvalid_o  = system_axi_resp[1].r_valid;
+  end else begin : gen_no_ext_axi_master
+    assign ext_axi_awready_o = 1'b0;
+    assign ext_axi_wready_o  = 1'b0;
+    assign ext_axi_bid_o     = '0;
+    assign ext_axi_bresp_o   = axi_pkg::RESP_OKAY;
+    assign ext_axi_bvalid_o  = 1'b0;
+    assign ext_axi_arready_o = 1'b0;
+    assign ext_axi_rid_o     = '0;
+    assign ext_axi_rdata_o   = '0;
+    assign ext_axi_rresp_o   = axi_pkg::RESP_OKAY;
+    assign ext_axi_rlast_o   = 1'b0;
+    assign ext_axi_rvalid_o  = 1'b0;
+  end
 
   //////////////////
   //  Assertions  //

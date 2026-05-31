@@ -25,7 +25,7 @@ module shuffle_stage import ara_pkg::*; import rvv_pkg::*;  #(
   // Shuffling starts from EEW1 to support mask loads
   localparam int           unsigned TotalNrLanes        = NrClusters * NrLanes,
   localparam int           unsigned NumStages           = $clog2(ClusterAxiDataWidth/NrLanes),
-  localparam int           unsigned NumBuffers          = 2,
+  localparam int           unsigned NumBuffers          = (NrClusters > 1) ? 2 : 1,
   localparam int           unsigned ClustersPerBuffer   = (NrClusters > NumBuffers) ? NrClusters / NumBuffers : 1
 ) (
   // Clock and Reset
@@ -944,7 +944,7 @@ module shuffle import rvv_pkg::*; #(
   logic [TotalDataWidth-1:0] data_in, data_out;
   logic [TotalDataWidth/8-1:0] be_in, be_out;
   
-  if (!isRead & !isMask) begin
+  if (!isRead & !isMask & (BlockSize >= 8)) begin
     // Write shuffle stage for 8/16b elements
     // Also shuffle the byte enable masks
     always_comb begin

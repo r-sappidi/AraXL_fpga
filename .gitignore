@@ -1,0 +1,9 @@
+.bender/
+
+# Vivado generated outputs
+fpga/ara_taxi_vivado/build/
+fpga/ara_taxi_vivado/.Xil/
+fpga/ara_taxi_vivado/*.jou
+fpga/ara_taxi_vivado/*.log
+fpga/ara_taxi_vivado/*.backup.jou
+fpga/ara_taxi_vivado/*.backup.log
