@@ -26,7 +26,8 @@ module ctrl_registers #(
     output logic           [DataWidth-1:0] dram_base_addr_o,
     output logic           [DataWidth-1:0] dram_end_addr_o,
     output logic           [DataWidth-1:0] event_trigger_o,
-    output logic           [DataWidth-1:0] hw_cnt_en_o
+    output logic           [DataWidth-1:0] hw_cnt_en_o,
+    output logic           [DataWidth-1:0] core_release_o
   );
 
   `include "common_cells/registers.svh"
@@ -35,7 +36,7 @@ module ctrl_registers #(
   //  Definitions  //
   ///////////////////
 
-  localparam int unsigned NumRegs          = 5;
+  localparam int unsigned NumRegs          = 6;
   localparam int unsigned DataWidthInBytes = (DataWidth + 7) / 8;
   localparam int unsigned RegNumBytes      = NumRegs * DataWidthInBytes;
 
@@ -43,12 +44,14 @@ module ctrl_registers #(
   localparam logic [DataWidthInBytes-1:0] ReadWriteReg = {DataWidthInBytes{1'b0}};
 
   // Memory map
-  // [39:32]: hw_cnt_en      (rw)
-  // [25:31]: event_trigger  (rw)
-  // [23:16]: dram_end_addr  (ro)
-  // [15:8]:  dram_base_addr (ro)
-  // [7:0]:   exit           (rw)
+  // 0x28: core_release   (rw)
+  // 0x20: hw_cnt_en      (rw)
+  // 0x18: event_trigger  (rw)
+  // 0x10: dram_end_addr  (ro)
+  // 0x08: dram_base_addr (ro)
+  // 0x00: exit           (rw)
   localparam logic [NumRegs-1:0][DataWidth-1:0] RegRstVal = '{
+    0,
     0,
     0,
     DRAMBaseAddr + DRAMLength,
@@ -56,6 +59,7 @@ module ctrl_registers #(
     0
   };
   localparam logic [NumRegs-1:0][DataWidthInBytes-1:0] AxiReadOnly = '{
+    ReadWriteReg,
     ReadWriteReg,
     ReadWriteReg,
     ReadOnlyReg,
@@ -70,6 +74,7 @@ module ctrl_registers #(
   logic [RegNumBytes-1:0] wr_active_d, wr_active_q;
 
   logic [DataWidth-1:0] hw_cnt_en;
+  logic [DataWidth-1:0] core_release;
   logic [DataWidth-1:0] event_trigger;
   logic [DataWidth-1:0] dram_base_address;
   logic [DataWidth-1:0] dram_end_address;
@@ -92,7 +97,7 @@ module ctrl_registers #(
     .rd_active_o(/* Unused */                               ),
     .reg_d_i    ('0                                         ),
     .reg_load_i ('0                                         ),
-    .reg_q_o    ({hw_cnt_en, event_trigger, dram_end_address, dram_base_address, exit})
+    .reg_q_o    ({core_release, hw_cnt_en, event_trigger, dram_end_address, dram_base_address, exit})
   );
 
   `FF(wr_active_q, wr_active_d, '0);
@@ -102,6 +107,7 @@ module ctrl_registers #(
   /////////////////
 
   assign hw_cnt_en_o      = hw_cnt_en;
+  assign core_release_o   = core_release;
   assign event_trigger_o  = event_trigger;
   assign dram_base_addr_o = dram_base_address;
   assign dram_end_addr_o  = dram_end_address;

@@ -89,8 +89,8 @@ module axi_to_mem #(
 
   axi_data_t      mem_rdata,
                   m2s_resp;
-  axi_pkg::len_t  r_cnt_d,        r_cnt_q,
-                  w_cnt_d,        w_cnt_q;
+  axi_pkg::len_t  r_cnt_d,        r_cnt_q;
+  logic [8:0]     w_cnt_d,        w_cnt_q;
   logic           arb_valid,      arb_ready,
                   rd_valid,       rd_ready,
                   wr_valid,       wr_ready,
@@ -166,38 +166,33 @@ module axi_to_mem #(
     wr_meta             = meta_t'{default: '0};
     wr_valid            = 1'b0;
     w_cnt_d             = w_cnt_q;
-    // Handle W bursts in progress.
+    // Handle W bursts in progress.  AXI AW and W channels are independent, so
+    // the AW metadata is accepted and buffered before write data is consumed.
     if (w_cnt_q > '0) begin
-      wr_meta_d.last = (w_cnt_q == 8'd1);
-      wr_meta        = wr_meta_d;
-      wr_meta.addr   = wr_meta_q.addr + axi_pkg::num_bytes(wr_meta_q.size);
+      wr_meta      = wr_meta_q;
+      wr_meta.last = (w_cnt_q == 9'd1);
       if (axi_req_i.w_valid) begin
         wr_valid = 1'b1;
         if (wr_ready) begin
           axi_resp_o.w_ready = 1'b1;
           w_cnt_d--;
-          wr_meta_d.addr = wr_meta.addr;
+          wr_meta_d.addr = wr_meta_q.addr + axi_pkg::num_bytes(wr_meta_q.size);
         end
       end
     // Handle new AW if there is one.
-    end else if (axi_req_i.aw_valid && axi_req_i.w_valid) begin
+    end else if (axi_req_i.aw_valid) begin
       wr_meta_d = '{
         addr:   addr_t'(axi_pkg::aligned_addr(axi_req_i.aw.addr, axi_req_i.aw.size)),
         atop:   axi_req_i.aw.atop,
         id:     axi_req_i.aw.id,
-        last:   (axi_req_i.aw.len == '0),
+        last:   1'b0,
         qos:    axi_req_i.aw.qos,
         size:   axi_req_i.aw.size,
         write:  1'b1
       };
-      wr_meta = wr_meta_d;
-      wr_meta.addr = addr_t'(axi_req_i.aw.addr);
-      wr_valid = 1'b1;
-      if (wr_ready) begin
-        w_cnt_d = axi_req_i.aw.len;
-        axi_resp_o.aw_ready = 1'b1;
-        axi_resp_o.w_ready = 1'b1;
-      end
+      wr_meta_d.addr = addr_t'(axi_req_i.aw.addr);
+      w_cnt_d = {1'b0, axi_req_i.aw.len} + 9'd1;
+      axi_resp_o.aw_ready = 1'b1;
     end
   end
 
@@ -420,6 +415,7 @@ module axi_to_mem #(
   // Assertions
   // pragma translate_off
   `ifndef VERILATOR
+  `ifndef XSIM
   default disable iff (!rst_ni);
   assume property (@(posedge clk_i)
       axi_req_i.ar_valid && !axi_resp_o.ar_ready |=> $stable(axi_req_i.ar))
@@ -444,6 +440,7 @@ module axi_to_mem #(
     else $error("Non-incrementing bursts are not supported!");
   assert property (@(posedge clk_i) meta_valid && meta.atop != '0 |-> meta.write)
     else $warning("Unexpected atomic operation on read.");
+  `endif
   `endif
   // pragma translate_on
 endmodule

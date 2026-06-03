@@ -31,6 +31,10 @@ make vivado NR_LANES=2 VLEN=2048 NR_CLUSTERS=1
 make vivado CREATE_PCIE_IP=0
 ```
 
-This project does not yet wire Ara to Taxi. It gives Vivado one project that
-contains both codebases plus the PCIe hard-IP shell so the integration wrapper
-can be developed in place.
+The XDMA top keeps the Ara core in reset after AXI reset while leaving the SoC
+fabric, L2, and control registers accessible from the external AXI master. After
+loading a program into L2 at 0x8000_0000, write bit 0 of the 64-bit
+core-release register at 0xD000_0028 to start execution.
+
+This project gives Vivado one project that contains both codebases plus the PCIe
+hard-IP shell so the integration wrapper can be developed in place.

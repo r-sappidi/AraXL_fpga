@@ -13,6 +13,7 @@ module litefury_araxl_xdma_top #(
     parameter int unsigned NrLanes    = `NR_LANES,
     parameter int unsigned NrClusters = `NR_CLUSTERS,
     parameter int unsigned AxiDataWidth = 32 * NrLanes * NrClusters,
+    parameter int unsigned XdmaAxiDataWidth = 64,
     parameter int unsigned AxiAddrWidth = 64,
     parameter int unsigned AxiSocIdWidth = 4
   ) (
@@ -28,9 +29,57 @@ module litefury_araxl_xdma_top #(
     output logic [7:0] h2c_sts_0,
     output logic [63:0] exit_o,
     output logic [63:0] hw_cnt_en_o
+`ifdef XSIM
+    // PIPE-mode simulation interface (exposed only when the XDMA IP is built
+    // with pipe_sim=true). Lets the testbench connect the endpoint to a root
+    // port at the PIPE level, bypassing the GT serdes (which cannot train in
+    // xsim). Not present in synthesis (pipe_sim=false there).
+    ,
+    input  logic [25:0] common_commands_in,
+    input  logic [83:0] pipe_rx_0_sigs,
+    input  logic [83:0] pipe_rx_1_sigs,
+    input  logic [83:0] pipe_rx_2_sigs,
+    input  logic [83:0] pipe_rx_3_sigs,
+    input  logic [83:0] pipe_rx_4_sigs,
+    input  logic [83:0] pipe_rx_5_sigs,
+    input  logic [83:0] pipe_rx_6_sigs,
+    input  logic [83:0] pipe_rx_7_sigs,
+    output logic [25:0] common_commands_out,
+    output logic [83:0] pipe_tx_0_sigs,
+    output logic [83:0] pipe_tx_1_sigs,
+    output logic [83:0] pipe_tx_2_sigs,
+    output logic [83:0] pipe_tx_3_sigs,
+    output logic [83:0] pipe_tx_4_sigs,
+    output logic [83:0] pipe_tx_5_sigs,
+    output logic [83:0] pipe_tx_6_sigs,
+    output logic [83:0] pipe_tx_7_sigs
+`endif
   );
 
+  `include "axi/typedef.svh"
+
+  typedef logic [AxiAddrWidth-1:0]       axi_addr_t;
+  typedef logic [AxiSocIdWidth-1:0]      axi_id_t;
+  typedef logic [XdmaAxiDataWidth-1:0]   xdma_axi_data_t;
+  typedef logic [XdmaAxiDataWidth/8-1:0] xdma_axi_strb_t;
+  typedef logic [AxiDataWidth-1:0]       ara_axi_data_t;
+  typedef logic [AxiDataWidth/8-1:0]     ara_axi_strb_t;
+  typedef logic                          axi_user_t;
+
+  `AXI_TYPEDEF_AW_CHAN_T(ext_axi_aw_chan_t, axi_addr_t, axi_id_t, axi_user_t)
+  `AXI_TYPEDEF_W_CHAN_T(xdma_axi_w_chan_t, xdma_axi_data_t, xdma_axi_strb_t, axi_user_t)
+  `AXI_TYPEDEF_W_CHAN_T(ara_axi_w_chan_t, ara_axi_data_t, ara_axi_strb_t, axi_user_t)
+  `AXI_TYPEDEF_B_CHAN_T(ext_axi_b_chan_t, axi_id_t, axi_user_t)
+  `AXI_TYPEDEF_AR_CHAN_T(ext_axi_ar_chan_t, axi_addr_t, axi_id_t, axi_user_t)
+  `AXI_TYPEDEF_R_CHAN_T(xdma_axi_r_chan_t, xdma_axi_data_t, axi_id_t, axi_user_t)
+  `AXI_TYPEDEF_R_CHAN_T(ara_axi_r_chan_t, ara_axi_data_t, axi_id_t, axi_user_t)
+  `AXI_TYPEDEF_REQ_T(xdma_axi_req_t, ext_axi_aw_chan_t, xdma_axi_w_chan_t, ext_axi_ar_chan_t)
+  `AXI_TYPEDEF_RESP_T(xdma_axi_resp_t, ext_axi_b_chan_t, xdma_axi_r_chan_t)
+  `AXI_TYPEDEF_REQ_T(ara_axi_req_t, ext_axi_aw_chan_t, ara_axi_w_chan_t, ext_axi_ar_chan_t)
+  `AXI_TYPEDEF_RESP_T(ara_axi_resp_t, ext_axi_b_chan_t, ara_axi_r_chan_t)
+
   logic axi_aclk;
+  logic user_clk;
   logic axi_aresetn;
   logic msi_enable;
   logic [2:0] msi_vector_width;
@@ -38,7 +87,13 @@ module litefury_araxl_xdma_top #(
   logic [0:0] usr_irq_ack;
 
   assign usr_irq_req = '0;
+  assign user_clk = axi_aclk;
   assign pcie_clkreq_l = 1'b0;
+
+  xdma_axi_req_t  xdma_axi_req;
+  xdma_axi_resp_t xdma_axi_resp;
+  ara_axi_req_t   ara_axi_req;
+  ara_axi_resp_t  ara_axi_resp;
 
   logic [AxiSocIdWidth-1:0]  m_axi_awid;
   logic [AxiAddrWidth-1:0]   m_axi_awaddr;
@@ -50,8 +105,8 @@ module litefury_araxl_xdma_top #(
   logic [2:0]                m_axi_awprot;
   logic                      m_axi_awvalid;
   logic                      m_axi_awready;
-  logic [AxiDataWidth-1:0]   m_axi_wdata;
-  logic [AxiDataWidth/8-1:0] m_axi_wstrb;
+  logic [XdmaAxiDataWidth-1:0]   m_axi_wdata;
+  logic [XdmaAxiDataWidth/8-1:0] m_axi_wstrb;
   logic                      m_axi_wlast;
   logic                      m_axi_wvalid;
   logic                      m_axi_wready;
@@ -70,7 +125,7 @@ module litefury_araxl_xdma_top #(
   logic                      m_axi_arvalid;
   logic                      m_axi_arready;
   logic [AxiSocIdWidth-1:0]  m_axi_rid;
-  logic [AxiDataWidth-1:0]   m_axi_rdata;
+  logic [XdmaAxiDataWidth-1:0]   m_axi_rdata;
   logic [1:0]                m_axi_rresp;
   logic                      m_axi_rlast;
   logic                      m_axi_rvalid;
@@ -141,21 +196,114 @@ module litefury_araxl_xdma_top #(
     .cfg_mgmt_type1_cfg_reg_access(1'b0),
     .c2h_sts_0(c2h_sts_0),
     .h2c_sts_0(h2c_sts_0)
+`ifdef XSIM
+    ,
+    .common_commands_in(common_commands_in),
+    .pipe_rx_0_sigs(pipe_rx_0_sigs),
+    .pipe_rx_1_sigs(pipe_rx_1_sigs),
+    .pipe_rx_2_sigs(pipe_rx_2_sigs),
+    .pipe_rx_3_sigs(pipe_rx_3_sigs),
+    .pipe_rx_4_sigs(pipe_rx_4_sigs),
+    .pipe_rx_5_sigs(pipe_rx_5_sigs),
+    .pipe_rx_6_sigs(pipe_rx_6_sigs),
+    .pipe_rx_7_sigs(pipe_rx_7_sigs),
+    .common_commands_out(common_commands_out),
+    .pipe_tx_0_sigs(pipe_tx_0_sigs),
+    .pipe_tx_1_sigs(pipe_tx_1_sigs),
+    .pipe_tx_2_sigs(pipe_tx_2_sigs),
+    .pipe_tx_3_sigs(pipe_tx_3_sigs),
+    .pipe_tx_4_sigs(pipe_tx_4_sigs),
+    .pipe_tx_5_sigs(pipe_tx_5_sigs),
+    .pipe_tx_6_sigs(pipe_tx_6_sigs),
+    .pipe_tx_7_sigs(pipe_tx_7_sigs)
+`endif
+  );
+
+  always_comb begin
+    xdma_axi_req = '0;
+    xdma_axi_req.aw.id    = m_axi_awid;
+    xdma_axi_req.aw.addr  = m_axi_awaddr;
+    xdma_axi_req.aw.len   = m_axi_awlen;
+    xdma_axi_req.aw.size  = m_axi_awsize;
+    xdma_axi_req.aw.burst = m_axi_awburst;
+    xdma_axi_req.aw.lock  = m_axi_awlock;
+    xdma_axi_req.aw.cache = m_axi_awcache;
+    xdma_axi_req.aw.prot  = m_axi_awprot;
+    xdma_axi_req.aw_valid = m_axi_awvalid;
+    xdma_axi_req.w.data   = m_axi_wdata;
+    xdma_axi_req.w.strb   = m_axi_wstrb;
+    xdma_axi_req.w.last   = m_axi_wlast;
+    xdma_axi_req.w_valid  = m_axi_wvalid;
+    xdma_axi_req.b_ready  = m_axi_bready;
+    xdma_axi_req.ar.id    = m_axi_arid;
+    xdma_axi_req.ar.addr  = m_axi_araddr;
+    xdma_axi_req.ar.len   = m_axi_arlen;
+    xdma_axi_req.ar.size  = m_axi_arsize;
+    xdma_axi_req.ar.burst = m_axi_arburst;
+    xdma_axi_req.ar.lock  = m_axi_arlock;
+    xdma_axi_req.ar.cache = m_axi_arcache;
+    xdma_axi_req.ar.prot  = m_axi_arprot;
+    xdma_axi_req.ar_valid = m_axi_arvalid;
+    xdma_axi_req.r_ready  = m_axi_rready;
+  end
+
+  assign m_axi_awready = xdma_axi_resp.aw_ready;
+  assign m_axi_wready  = xdma_axi_resp.w_ready;
+  assign m_axi_bid     = xdma_axi_resp.b.id;
+  assign m_axi_bresp   = xdma_axi_resp.b.resp;
+  assign m_axi_bvalid  = xdma_axi_resp.b_valid;
+  assign m_axi_arready = xdma_axi_resp.ar_ready;
+  assign m_axi_rid     = xdma_axi_resp.r.id;
+  assign m_axi_rdata   = xdma_axi_resp.r.data;
+  assign m_axi_rresp   = xdma_axi_resp.r.resp;
+  assign m_axi_rlast   = xdma_axi_resp.r.last;
+  assign m_axi_rvalid  = xdma_axi_resp.r_valid;
+
+  axi_dw_converter #(
+    .AxiMaxReads        (2                 ),
+    .AxiSlvPortDataWidth(XdmaAxiDataWidth  ),
+    .AxiMstPortDataWidth(AxiDataWidth      ),
+    .AxiAddrWidth       (AxiAddrWidth      ),
+    .AxiIdWidth         (AxiSocIdWidth     ),
+    .aw_chan_t          (ext_axi_aw_chan_t ),
+    .mst_w_chan_t       (ara_axi_w_chan_t  ),
+    .slv_w_chan_t       (xdma_axi_w_chan_t ),
+    .b_chan_t           (ext_axi_b_chan_t  ),
+    .ar_chan_t          (ext_axi_ar_chan_t ),
+    .mst_r_chan_t       (ara_axi_r_chan_t  ),
+    .slv_r_chan_t       (xdma_axi_r_chan_t ),
+    .axi_mst_req_t      (ara_axi_req_t     ),
+    .axi_mst_resp_t     (ara_axi_resp_t    ),
+    .axi_slv_req_t      (xdma_axi_req_t    ),
+    .axi_slv_resp_t     (xdma_axi_resp_t   )
+  ) i_xdma_to_ara_dwc (
+    .clk_i     (axi_aclk      ),
+    .rst_ni    (axi_aresetn   ),
+    .slv_req_i (xdma_axi_req  ),
+    .slv_resp_o(xdma_axi_resp ),
+    .mst_req_o (ara_axi_req   ),
+    .mst_resp_i(ara_axi_resp  )
   );
 
   ara_soc #(
     .NrLanes(NrLanes),
     .NrClusters(NrClusters),
+    .AxiDataWidth(AxiDataWidth),
     .AxiAddrWidth(AxiAddrWidth),
     .AxiIdWidth(5),
     .FPUSupport(ara_pkg::FPUSupportNone),
     .FPExtSupport(ara_pkg::FPExtSupportDisable),
     .FixPtSupport(ara_pkg::FixedPointDisable),
     .L2NumWords(2**14),
-    .ExternalAxiMaster(1'b1)
+    .ExternalAxiMaster(1'b1),
+    .CoreReleaseGate(1'b1)
   ) i_ara_soc (
     .clk_i(axi_aclk),
+`ifdef ARA_HOLD_RESET
+    .rst_ni(1'b0),  // DIAGNOSTIC: hold Ara in reset to isolate the link-up storm
+`else
     .rst_ni(axi_aresetn),
+`endif
     .exit_o(exit_o),
     .hw_cnt_en_o(hw_cnt_en_o),
     .scan_enable_i(1'b0),
@@ -169,45 +317,49 @@ module litefury_araxl_xdma_top #(
     .uart_prdata_i('0),
     .uart_pready_i(1'b1),
     .uart_pslverr_i(1'b0),
-    .ext_axi_awid_i(m_axi_awid),
-    .ext_axi_awaddr_i(m_axi_awaddr),
-    .ext_axi_awlen_i(m_axi_awlen),
-    .ext_axi_awsize_i(m_axi_awsize),
-    .ext_axi_awburst_i(m_axi_awburst),
-    .ext_axi_awlock_i(m_axi_awlock),
-    .ext_axi_awcache_i(m_axi_awcache),
-    .ext_axi_awprot_i(m_axi_awprot),
-    .ext_axi_awvalid_i(m_axi_awvalid),
-    .ext_axi_awready_o(m_axi_awready),
-    .ext_axi_wdata_i(m_axi_wdata),
-    .ext_axi_wstrb_i(m_axi_wstrb),
-    .ext_axi_wlast_i(m_axi_wlast),
-    .ext_axi_wvalid_i(m_axi_wvalid),
-    .ext_axi_wready_o(m_axi_wready),
-    .ext_axi_bid_o(m_axi_bid),
-    .ext_axi_bresp_o(m_axi_bresp),
-    .ext_axi_bvalid_o(m_axi_bvalid),
-    .ext_axi_bready_i(m_axi_bready),
-    .ext_axi_arid_i(m_axi_arid),
-    .ext_axi_araddr_i(m_axi_araddr),
-    .ext_axi_arlen_i(m_axi_arlen),
-    .ext_axi_arsize_i(m_axi_arsize),
-    .ext_axi_arburst_i(m_axi_arburst),
-    .ext_axi_arlock_i(m_axi_arlock),
-    .ext_axi_arcache_i(m_axi_arcache),
-    .ext_axi_arprot_i(m_axi_arprot),
-    .ext_axi_arvalid_i(m_axi_arvalid),
-    .ext_axi_arready_o(m_axi_arready),
-    .ext_axi_rid_o(m_axi_rid),
-    .ext_axi_rdata_o(m_axi_rdata),
-    .ext_axi_rresp_o(m_axi_rresp),
-    .ext_axi_rlast_o(m_axi_rlast),
-    .ext_axi_rvalid_o(m_axi_rvalid),
-    .ext_axi_rready_i(m_axi_rready)
+    .ext_axi_awid_i(ara_axi_req.aw.id),
+    .ext_axi_awaddr_i(ara_axi_req.aw.addr),
+    .ext_axi_awlen_i(ara_axi_req.aw.len),
+    .ext_axi_awsize_i(ara_axi_req.aw.size),
+    .ext_axi_awburst_i(ara_axi_req.aw.burst),
+    .ext_axi_awlock_i(ara_axi_req.aw.lock),
+    .ext_axi_awcache_i(ara_axi_req.aw.cache),
+    .ext_axi_awprot_i(ara_axi_req.aw.prot),
+    .ext_axi_awvalid_i(ara_axi_req.aw_valid),
+    .ext_axi_awready_o(ara_axi_resp.aw_ready),
+    .ext_axi_wdata_i(ara_axi_req.w.data),
+    .ext_axi_wstrb_i(ara_axi_req.w.strb),
+    .ext_axi_wlast_i(ara_axi_req.w.last),
+    .ext_axi_wvalid_i(ara_axi_req.w_valid),
+    .ext_axi_wready_o(ara_axi_resp.w_ready),
+    .ext_axi_bid_o(ara_axi_resp.b.id),
+    .ext_axi_bresp_o(ara_axi_resp.b.resp),
+    .ext_axi_bvalid_o(ara_axi_resp.b_valid),
+    .ext_axi_bready_i(ara_axi_req.b_ready),
+    .ext_axi_arid_i(ara_axi_req.ar.id),
+    .ext_axi_araddr_i(ara_axi_req.ar.addr),
+    .ext_axi_arlen_i(ara_axi_req.ar.len),
+    .ext_axi_arsize_i(ara_axi_req.ar.size),
+    .ext_axi_arburst_i(ara_axi_req.ar.burst),
+    .ext_axi_arlock_i(ara_axi_req.ar.lock),
+    .ext_axi_arcache_i(ara_axi_req.ar.cache),
+    .ext_axi_arprot_i(ara_axi_req.ar.prot),
+    .ext_axi_arvalid_i(ara_axi_req.ar_valid),
+    .ext_axi_arready_o(ara_axi_resp.ar_ready),
+    .ext_axi_rid_o(ara_axi_resp.r.id),
+    .ext_axi_rdata_o(ara_axi_resp.r.data),
+    .ext_axi_rresp_o(ara_axi_resp.r.resp),
+    .ext_axi_rlast_o(ara_axi_resp.r.last),
+    .ext_axi_rvalid_o(ara_axi_resp.r_valid),
+    .ext_axi_rready_i(ara_axi_req.r_ready)
   );
 
-  if (AxiDataWidth != 64) begin : gen_bad_axi_width
-    initial $error("litefury_araxl_xdma_top requires 64-bit AraXL AXI; use NR_LANES*NR_CLUSTERS=2.");
+  if (XdmaAxiDataWidth != 64) begin : gen_bad_xdma_axi_width
+    initial $error("litefury_araxl_xdma_top expects the generated XDMA AXI data width to be 64 bits.");
+  end
+
+  if (AxiDataWidth < XdmaAxiDataWidth) begin : gen_bad_ara_axi_width
+    initial $error("litefury_araxl_xdma_top only supports XDMA-to-Ara AXI upsizing or equal widths.");
   end
 
 endmodule

@@ -97,6 +97,10 @@ ifdef preload
 endif
 questa_args += -sv_lib $(dpi_library)/ara_dpi -work $(library) -voptargs=+acc
 questa_args += -suppress vsim-3009 -suppress vopt-7033
+# Questa 2024+/2025 is stricter than the 2019/2021 versions this flow targeted:
+# it promotes several benign multiple-driver / enum-strictness checks to errors.
+# Suppress them (same class already suppressed above) so modern Questa elaborates.
+questa_args += -suppress vopt-7045 -suppress vopt-8386 -suppress vsim-3837
 
 # DPI source files
 dpi   := $(patsubst tb/dpi/%.cc,$(buildpath)/$(dpi_library)/%.o,$(wildcard tb/dpi/*.cc))

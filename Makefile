@@ -30,6 +30,12 @@ VERIL_VERSION           ?= v5.012
 DTC_COMMIT              ?= b6910bec11614980a21e46fbccc35934b671bd81
 
 CMAKE ?= cmake
+NINJA ?= $(shell command -v ninja 2>/dev/null)
+ifeq ($(NINJA),)
+CMAKE_GENERATOR ?= Unix Makefiles
+else
+CMAKE_GENERATOR ?= Ninja
+endif
 
 # CC and CXX are Makefile default variables that are always defined in a Makefile. Hence, overwrite
 # the variable if it is only defined by the Makefile (its origin in the Makefile's default).
@@ -40,9 +46,16 @@ ifeq ($(origin CXX),default)
 CXX    = g++
 endif
 
-# We need a recent LLVM to compile Verilator
+# Prefer Clang for Verilator when available, but fall back to the host compiler pair.
+HOST_CLANG_CC  := $(shell command -v clang 2>/dev/null)
+HOST_CLANG_CXX := $(shell command -v clang++ 2>/dev/null)
+ifneq ($(and $(HOST_CLANG_CC),$(HOST_CLANG_CXX)),)
 CLANG_CC  ?= clang
 CLANG_CXX ?= clang++
+else
+CLANG_CC  ?= $(CC)
+CLANG_CXX ?= $(CXX)
+endif
 ifneq (${CLANG_PATH},)
 	CLANG_CXXFLAGS := "-nostdinc++ -isystem $(CLANG_PATH)/include/c++/v1"
 	CLANG_LDFLAGS  := "-L $(CLANG_PATH)/lib -Wl,-rpath,$(CLANG_PATH)/lib -lc++ -nostdlib++"
@@ -50,6 +63,8 @@ else
 	CLANG_CXXFLAGS := ""
 	CLANG_LDFLAGS  := ""
 endif
+
+VERILATOR_BUILD_TOOLS := autoconf flex bison help2man perl python3
 
 # Submodule update - Big modules are not automatically updated by default
 # and require a manual call.
@@ -80,7 +95,7 @@ toolchain-gcc: git-submodules Makefile
 toolchain-llvm-main: git-submodules Makefile
 	mkdir -p $(LLVM_INSTALL_DIR)
 	cd $(ROOT_DIR)/toolchain/riscv-llvm && rm -rf build && mkdir -p build && cd build && \
-	$(CMAKE) -G Ninja  \
+	$(CMAKE) -G "$(CMAKE_GENERATOR)"  \
 	-DCMAKE_INSTALL_PREFIX=$(LLVM_INSTALL_DIR) \
 	-DLLVM_ENABLE_PROJECTS="clang;lld" \
 	-DCMAKE_BUILD_TYPE=Release \
@@ -106,7 +121,7 @@ toolchain-llvm-newlib: git-submodules Makefile toolchain-llvm-main
 
 toolchain-llvm-rt: git-submodules Makefile toolchain-llvm-main toolchain-llvm-newlib
 	cd $(ROOT_DIR)/toolchain/riscv-llvm/compiler-rt && rm -rf build && mkdir -p build && cd build && \
-	$(CMAKE) $(ROOT_DIR)/toolchain/riscv-llvm/compiler-rt -G Ninja \
+	$(CMAKE) $(ROOT_DIR)/toolchain/riscv-llvm/compiler-rt -G "$(CMAKE_GENERATOR)" \
 	-DCMAKE_INSTALL_PREFIX=$(LLVM_INSTALL_DIR) \
 	-DCMAKE_C_COMPILER_TARGET="riscv64-unknown-elf" \
 	-DCMAKE_ASM_COMPILER_TARGET="riscv64-unknown-elf" \
@@ -168,10 +183,21 @@ ${ISA_SIM_INSTALL_DIR}: Makefile
 	make -j32 && make install
 
 # Verilator
-.PHONY: verilator
+.PHONY: verilator check-verilator-deps
 verilator: ${VERIL_INSTALL_DIR}
 
-${VERIL_INSTALL_DIR}: Makefile
+check-verilator-deps:
+	@missing=(); \
+	for tool in $(VERILATOR_BUILD_TOOLS); do \
+		command -v $$tool >/dev/null 2>&1 || missing+=($$tool); \
+	done; \
+	if [ $${#missing[@]} -ne 0 ]; then \
+		echo "Missing Verilator build dependencies: $${missing[*]}" >&2; \
+		echo "Install them, e.g. sudo apt-get install autoconf flex bison help2man perl python3" >&2; \
+		exit 1; \
+	fi
+
+${VERIL_INSTALL_DIR}: Makefile | check-verilator-deps
 	# Checkout the right version
 	cd $(CURDIR)/toolchain/verilator && git reset --hard && git fetch && git checkout ${VERIL_VERSION}
 	# Compile verilator

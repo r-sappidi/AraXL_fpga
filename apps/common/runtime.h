@@ -32,6 +32,7 @@ extern int64_t event_trigger;
 extern int64_t timer;
 // SoC-level CSR
 extern uint64_t hw_cnt_en_reg;
+extern uint64_t core_release_reg;
 
 // Return the current value of the cycle counter
 inline int64_t get_cycle_count() {
