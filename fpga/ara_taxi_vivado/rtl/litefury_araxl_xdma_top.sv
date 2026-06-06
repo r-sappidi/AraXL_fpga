@@ -17,7 +17,16 @@ module litefury_araxl_xdma_top #(
     parameter int unsigned AxiAddrWidth = 64,
     parameter int unsigned AxiSocIdWidth = 4
   ) (
+`ifdef XSIM
+    // In PIPE-mode sim there is no GT; the testbench drives the buffered clock
+    // directly, so sys_clk stays a plain single-ended input.
     input  logic       sys_clk,
+`else
+    // Synthesis/implementation: differential PCIe refclk on MGTREFCLK0_216
+    // (F6/E6), buffered to sys_clk by an IBUFDS_GTE2 below.
+    input  logic       sys_clk_p,
+    input  logic       sys_clk_n,
+`endif
     input  logic       sys_rst_n,
     output logic       user_lnk_up,
     output logic [3:0] pci_exp_txp,
@@ -77,6 +86,19 @@ module litefury_araxl_xdma_top #(
   `AXI_TYPEDEF_RESP_T(xdma_axi_resp_t, ext_axi_b_chan_t, xdma_axi_r_chan_t)
   `AXI_TYPEDEF_REQ_T(ara_axi_req_t, ext_axi_aw_chan_t, ara_axi_w_chan_t, ext_axi_ar_chan_t)
   `AXI_TYPEDEF_RESP_T(ara_axi_resp_t, ext_axi_b_chan_t, ara_axi_r_chan_t)
+
+`ifndef XSIM
+  // 7-series XDMA sys_clk must be driven by the GT refclk buffer, not a fabric
+  // IBUF, or IO/BUFG clock placement fails (Place 30-574).
+  logic sys_clk;
+  IBUFDS_GTE2 refclk_ibuf (
+    .O    (sys_clk),
+    .ODIV2(),
+    .CEB  (1'b0),
+    .I    (sys_clk_p),
+    .IB   (sys_clk_n)
+  );
+`endif
 
   logic axi_aclk;
   logic user_clk;
@@ -285,6 +307,107 @@ module litefury_araxl_xdma_top #(
     .mst_resp_i(ara_axi_resp  )
   );
 
+`ifdef XSIM_XDMA_AXI_STUB
+  logic [AxiSocIdWidth-1:0] stub_aw_id_q [0:15];
+  logic [AxiAddrWidth-1:0]  stub_aw_addr_q [0:15];
+  logic [7:0]               stub_aw_len_q [0:15];
+  logic [3:0]               stub_aw_wptr_q, stub_aw_rptr_q;
+  logic [4:0]               stub_aw_count_q;
+  logic [63:0]              stub_l2_bytes_q;
+  logic [63:0]              stub_ctrl_bytes_q;
+  logic                     stub_core_release_q;
+  logic                     stub_b_valid_q;
+  logic [AxiSocIdWidth-1:0] stub_b_id_q;
+
+  function automatic logic stub_data_nonzero(
+    input ara_axi_data_t data,
+    input ara_axi_strb_t strb
+  );
+    stub_data_nonzero = 1'b0;
+    for (int unsigned i = 0; i < AxiDataWidth/8; i++) begin
+      if (strb[i] && data[i*8 +: 8] != 8'h00) begin
+        stub_data_nonzero = 1'b1;
+      end
+    end
+  endfunction
+
+  function automatic logic [63:0] stub_count_strb(input ara_axi_strb_t strb);
+    stub_count_strb = 64'b0;
+    for (int unsigned i = 0; i < AxiDataWidth/8; i++) begin
+      if (strb[i]) begin
+        stub_count_strb = stub_count_strb + 64'd1;
+      end
+    end
+  endfunction
+
+  assign ara_axi_resp.aw_ready = (stub_aw_count_q < 5'd16);
+  assign ara_axi_resp.w_ready  = (stub_aw_count_q != 5'd0);
+  assign ara_axi_resp.b_valid  = stub_b_valid_q;
+  assign ara_axi_resp.b.id     = stub_b_id_q;
+  assign ara_axi_resp.b.resp   = 2'b00;
+  assign ara_axi_resp.b.user   = '0;
+  assign ara_axi_resp.ar_ready = 1'b1;
+  assign ara_axi_resp.r_valid  = ara_axi_req.ar_valid;
+  assign ara_axi_resp.r.id     = ara_axi_req.ar.id;
+  assign ara_axi_resp.r.data   = '0;
+  assign ara_axi_resp.r.resp   = 2'b00;
+  assign ara_axi_resp.r.last   = 1'b1;
+  assign ara_axi_resp.r.user   = '0;
+  assign exit_o                = {63'b0, stub_core_release_q};
+  assign hw_cnt_en_o           = 64'b0;
+
+  always_ff @(posedge axi_aclk or negedge axi_aresetn) begin
+    if (!axi_aresetn) begin
+      stub_aw_wptr_q       <= '0;
+      stub_aw_rptr_q       <= '0;
+      stub_aw_count_q      <= '0;
+      stub_l2_bytes_q      <= 64'b0;
+      stub_ctrl_bytes_q    <= 64'b0;
+      stub_core_release_q  <= 1'b0;
+      stub_b_valid_q       <= 1'b0;
+      stub_b_id_q          <= '0;
+    end else begin
+      if (stub_b_valid_q && ara_axi_req.b_ready) begin
+        stub_b_valid_q <= 1'b0;
+      end
+
+      if (ara_axi_req.aw_valid && ara_axi_resp.aw_ready) begin
+        stub_aw_id_q[stub_aw_wptr_q]   <= ara_axi_req.aw.id;
+        stub_aw_addr_q[stub_aw_wptr_q] <= ara_axi_req.aw.addr;
+        stub_aw_len_q[stub_aw_wptr_q]  <= ara_axi_req.aw.len;
+        stub_aw_wptr_q                 <= stub_aw_wptr_q + 4'd1;
+        stub_aw_count_q                <= stub_aw_count_q + 5'd1;
+        $display("[%t] XDMA-STUB AW addr=%h len=%0d size=%0d id=%h",
+                 $realtime, ara_axi_req.aw.addr, ara_axi_req.aw.len,
+                 ara_axi_req.aw.size, ara_axi_req.aw.id);
+      end
+
+      if (ara_axi_req.w_valid && ara_axi_resp.w_ready) begin
+        if (stub_aw_addr_q[stub_aw_rptr_q] >= 64'h0000_0000_8000_0000 &&
+            stub_aw_addr_q[stub_aw_rptr_q] <  64'h0000_0000_C000_0000) begin
+          stub_l2_bytes_q <= stub_l2_bytes_q + stub_count_strb(ara_axi_req.w.strb);
+        end else if (stub_aw_addr_q[stub_aw_rptr_q] >= 64'h0000_0000_D000_0000 &&
+                     stub_aw_addr_q[stub_aw_rptr_q] <  64'h0000_0000_D000_1000) begin
+          stub_ctrl_bytes_q <= stub_ctrl_bytes_q + stub_count_strb(ara_axi_req.w.strb);
+          if (stub_data_nonzero(ara_axi_req.w.data, ara_axi_req.w.strb)) begin
+            stub_core_release_q <= 1'b1;
+            $display("[%t] XDMA-STUB core-release write observed at AXI addr window %h data=%h strb=%h",
+                     $realtime, stub_aw_addr_q[stub_aw_rptr_q], ara_axi_req.w.data, ara_axi_req.w.strb);
+          end
+        end
+
+        if (ara_axi_req.w.last) begin
+          stub_b_valid_q  <= 1'b1;
+          stub_b_id_q     <= stub_aw_id_q[stub_aw_rptr_q];
+          stub_aw_rptr_q  <= stub_aw_rptr_q + 4'd1;
+          stub_aw_count_q <= stub_aw_count_q - 5'd1;
+          $display("[%t] XDMA-STUB WLAST addr=%h l2_bytes=%0d ctrl_bytes=%0d",
+                   $realtime, stub_aw_addr_q[stub_aw_rptr_q], stub_l2_bytes_q, stub_ctrl_bytes_q);
+        end
+      end
+    end
+  end
+`else
   ara_soc #(
     .NrLanes(NrLanes),
     .NrClusters(NrClusters),
@@ -295,8 +418,7 @@ module litefury_araxl_xdma_top #(
     .FPExtSupport(ara_pkg::FPExtSupportDisable),
     .FixPtSupport(ara_pkg::FixedPointDisable),
     .L2NumWords(2**14),
-    .ExternalAxiMaster(1'b1),
-    .CoreReleaseGate(1'b1)
+    .ExternalAxiMaster(1'b1)
   ) i_ara_soc (
     .clk_i(axi_aclk),
 `ifdef ARA_HOLD_RESET
@@ -353,6 +475,7 @@ module litefury_araxl_xdma_top #(
     .ext_axi_rvalid_o(ara_axi_resp.r_valid),
     .ext_axi_rready_i(ara_axi_req.r_ready)
   );
+`endif
 
   if (XdmaAxiDataWidth != 64) begin : gen_bad_xdma_axi_width
     initial $error("litefury_araxl_xdma_top expects the generated XDMA AXI data width to be 64 bits.");

@@ -146,5 +146,19 @@ begin : araxl_dotproduct_test
   end
   board.RP.tx_usrapp.TSK_XDMA_REG_WRITE(16'h0004, 32'h0, 4'hF);
 
+`ifdef XSIM_XDMA_AXI_STUB
+  if (board.EP.stub_l2_bytes_q < payload_len) begin
+    $display("---***ERROR*** XDMA stub observed only %0d L2 bytes, expected at least %0d",
+             board.EP.stub_l2_bytes_q, payload_len);
+    $finish(2);
+  end
+  if (board.EP.stub_core_release_q !== 1'b1) begin
+    $display("---***ERROR*** XDMA stub did not observe core-release write");
+    $finish(2);
+  end
+  $display("**** XDMA-STUB PASS: real XDMA loaded %0d bytes to AraXL L2 boundary and wrote core_release", board.EP.stub_l2_bytes_q);
+  $finish;
+`else
   $display("**** AraXL core released. Waiting for program exit register.");
+`endif
 end

@@ -16,7 +16,7 @@ VIVADO ?= $(firstword $(shell command -v vivado 2>/dev/null) $(wildcard $(HOME)/
 BUILD_DIR ?= build
 XPR := $(BUILD_DIR)/$(PROJECT)/$(PROJECT).xpr
 
-.PHONY: all xpr vivado litefury-xpr litefury-vivado xdma-example-xsim pcie7x-rp araxl-xdma-xsim-setup araxl-dotproduct-xsim check-vivado clean
+.PHONY: all xpr vivado litefury-xpr litefury-vivado litefury-cva6-xpr litefury-cva6-synth litefury-cva6-impl xdma-example-xsim pcie7x-rp araxl-xdma-xsim-setup araxl-xdma-boundary-xsim check-vivado clean
 
 all: xpr
 
@@ -40,6 +40,17 @@ litefury-xpr:
 
 litefury-vivado:
 	$(MAKE) vivado PART=xc7a100tlfgg484-2L TOP=litefury_araxl_xdma_top NR_LANES=2 NR_CLUSTERS=1 CREATE_PCIE_IP=1
+
+litefury-cva6-xpr:
+	$(MAKE) xpr PROJECT=litefury_cva6_xdma PART=xc7a100tlfgg484-2L TOP=litefury_cva6_xdma_top NR_LANES=1 NR_CLUSTERS=1 CREATE_PCIE_IP=1
+
+litefury-cva6-synth: litefury-cva6-xpr
+	"$(VIVADO)" -nojournal -nolog -mode batch -source synth_project.tcl -tclargs build/litefury_cva6_xdma/litefury_cva6_xdma.xpr
+
+IMPL_TO_STEP  ?= write_bitstream
+IMPL_STRATEGY ?=
+litefury-cva6-impl: litefury-cva6-xpr
+	"$(VIVADO)" -nojournal -nolog -mode batch -source impl_project.tcl -tclargs build/litefury_cva6_xdma/litefury_cva6_xdma.xpr $(IMPL_TO_STEP) $(IMPL_STRATEGY)
 
 xdma-example-xsim: $(XPR) | check-vivado
 	"$(VIVADO)" -nojournal -nolog -mode batch -source tb/xdma_xsim/create_xdma_example.tcl
@@ -79,14 +90,19 @@ ARAXL_RUN_CMD = "$(VIVADO)" -nojournal -nolog -mode batch -source tb/xdma_xsim/r
 $(ARAXL_PAYLOAD_HEX): $(ARAXL_APP)
 	python3 tb/xdma_xsim/elf_to_xdma_hex.py $< $@ --bin $(ARAXL_PAYLOAD_BIN) > $@.len
 
-araxl-dotproduct-xsim: araxl-xdma-xsim-setup $(ARAXL_PAYLOAD_HEX) | check-vivado
+# NOTE: the full-execution AraXL sim (formerly araxl-dotproduct-xsim) is removed:
+# xsim cannot settle the pulp axi_xbar, so program execution never ran. Only the
+# XDMA-load boundary test below (fabric stubbed) is retained -- it validates the
+# real XDMA H2C path to the L2 boundary without executing.
+araxl-xdma-boundary-xsim: araxl-xdma-xsim-setup $(ARAXL_PAYLOAD_HEX) | check-vivado
 	@if systemd-run --user --scope --quiet -p MemoryMax=$(XSIM_MEM_MAX) -p MemorySwapMax=$(XSIM_SWAP_MAX) true >/dev/null 2>&1; then \
-		echo "Running xsim under systemd scope (MemoryMax=$(XSIM_MEM_MAX), MemorySwapMax=$(XSIM_SWAP_MAX))"; \
-		systemd-run --user --scope --quiet -p MemoryMax=$(XSIM_MEM_MAX) -p MemorySwapMax=$(XSIM_SWAP_MAX) \
-			$(ARAXL_RUN_CMD); \
+		echo "Running XDMA boundary xsim under systemd scope (MemoryMax=$(XSIM_MEM_MAX), MemorySwapMax=$(XSIM_SWAP_MAX))"; \
+		systemd-run --user --scope --quiet \
+			-p MemoryMax=$(XSIM_MEM_MAX) -p MemorySwapMax=$(XSIM_SWAP_MAX) \
+			env ARAXL_EXTRA_DEFINES="XSIM_XDMA_AXI_STUB" $(ARAXL_RUN_CMD); \
 	else \
 		echo "systemd --user scopes unavailable; capping with ulimit -v $(XSIM_VMEM_KB) KB"; \
-		( ulimit -v $(XSIM_VMEM_KB); $(ARAXL_RUN_CMD) ); \
+		( ulimit -v $(XSIM_VMEM_KB); env ARAXL_EXTRA_DEFINES="XSIM_XDMA_AXI_STUB" $(ARAXL_RUN_CMD) ); \
 	fi
 
 clean:

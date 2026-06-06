@@ -1,8 +1,13 @@
 .bender/
+install/
 
 # Vivado generated outputs
 fpga/ara_taxi_vivado/build/
 fpga/ara_taxi_vivado/.Xil/
+fpga/ara_taxi_vivado/.cxl/
+fpga/ara_taxi_vivado/.cxl.questasim.version
+fpga/ara_taxi_vivado/*.out
+fpga/ara_taxi_vivado/*.pb
 fpga/ara_taxi_vivado/*.jou
 fpga/ara_taxi_vivado/*.log
 fpga/ara_taxi_vivado/*.backup.jou

@@ -150,6 +150,11 @@ proc add_litefury_constraints {root} {
     if {[file exists $xdc]} {
         set_property PROCESSING_ORDER LATE [get_files -of_objects [get_filesets constrs_1] $xdc]
     }
+
+    set gt_locs_tcl [file join $root fpga ara_taxi_vivado apply_litefury_gt_locs.tcl]
+    if {[file exists $gt_locs_tcl] && [llength [get_runs impl_1]] > 0} {
+        set_property STEPS.PLACE_DESIGN.TCL.PRE $gt_locs_tcl [get_runs impl_1]
+    }
 }
 
 proc create_artix7_xdma_ip {} {

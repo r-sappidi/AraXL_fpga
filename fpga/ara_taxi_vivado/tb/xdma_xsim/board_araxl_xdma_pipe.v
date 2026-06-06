@@ -146,6 +146,7 @@ module board;
     sys_rst_n = 1'b1;
   end
 
+`ifndef XSIM_XDMA_AXI_STUB
   // Finish when the program writes the Ara exit register.
   always @(posedge EP.axi_aclk) begin
     if (EP.axi_aresetn && exit_o[0]) begin
@@ -153,6 +154,7 @@ module board;
       $finish;
     end
   end
+`endif
 
   // Link-up watchdog (PIPE mode trains quickly).
   reg last_ep_lnk_up;
@@ -203,6 +205,7 @@ module board;
     if (EP.ara_axi_resp.b_valid===1'b1 && EP.ara_axi_req.b_ready ===1'b1) a_bh  = a_bh  + 1;
   end
 
+`ifndef XSIM_XDMA_AXI_STUB
   // One-shot probe: is the gated CVA6 master (xbar slave port 0) presenting X
   // to the shared xbar while the ext (XDMA) master's write stalls?
   reg cva6_probed = 1'b0;
@@ -214,6 +217,7 @@ module board;
              EP.i_ara_soc.system_axi_req[0].w_valid,  EP.i_ara_soc.system_axi_req[0].b_ready,
              EP.i_ara_soc.system_rst_n);
   end
+`endif
 
   // Heartbeat: prints every 1 us of SIM time. If these stop appearing while the
   // process is still alive, simulated time has frozen (zero-delay deadlock).
@@ -240,10 +244,16 @@ module board;
   // Catch the AXI reset release (link-up) and the XDMA master's valid lines at
   // that instant -- if they are X, that is the storm source into the Ara AXI path.
   always @(EP.axi_aresetn) begin
+`ifdef XSIM_XDMA_AXI_STUB
+    $display("[%t] ARESETN -> %b | m_axi awv=%b arv=%b wv=%b | araq_awv=%b araq_arv=%b araq_wv=%b",
+             $realtime, EP.axi_aresetn, EP.m_axi_awvalid, EP.m_axi_arvalid, EP.m_axi_wvalid,
+             EP.ara_axi_req.aw_valid, EP.ara_axi_req.ar_valid, EP.ara_axi_req.w_valid);
+`else
     $display("[%t] ARESETN -> %b | m_axi awv=%b arv=%b wv=%b | sysrstn=%b core_rel=%b araq_awv=%b araq_arv=%b araq_wv=%b",
              $realtime, EP.axi_aresetn, EP.m_axi_awvalid, EP.m_axi_arvalid, EP.m_axi_wvalid,
              EP.i_ara_soc.system_rst_n, EP.i_ara_soc.core_release[0],
              EP.ara_axi_req.aw_valid, EP.ara_axi_req.ar_valid, EP.ara_axi_req.w_valid);
+`endif
   end
   // Sample again shortly after release to catch X that appears post-reset.
   reg armed = 1'b0;
